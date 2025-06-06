@@ -5,14 +5,6 @@ from glob import glob
 from mutagen.mp3 import MP3
 from mutagen.id3 import ID3, APIC, USLT, TIT2, TPE1, TALB, TDRC
 from tqdm import tqdm
-from utils import (
-    clean_filename,
-    extract_artist_title,
-    normalize_audio,
-    fetch_cover_image,
-    fetch_lyrics,
-    update_tags_and_save
-)
 
 def process_file(filepath, report):
     try:
