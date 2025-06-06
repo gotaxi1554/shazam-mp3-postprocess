@@ -6,7 +6,7 @@ from mutagen.mp3 import MP3
 
 def clean_filename(filename):
     name, ext = os.path.splitext(filename)
-    cleaned = re.sub(r"[\[\]{}()_–•“”"'*?<>|=]+", "", name)
+    cleaned = re.sub(r'[\[\]{}()_–•“”"*?<>|=]+', "", name)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     cleaned = re.sub(r"(\s[-~\s]*\d{4,})$", "", cleaned)
     return f"{cleaned}{ext}"
