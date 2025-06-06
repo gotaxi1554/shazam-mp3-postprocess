@@ -1,87 +1,89 @@
 import os
 import re
-import sys
-from glob import glob
+import requests
+import subprocess
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, APIC, USLT, ID3NoHeaderError
 from mutagen.mp3 import MP3
-from mutagen.id3 import ID3, APIC, USLT, TIT2, TPE1, TALB, TDRC
-from tqdm import tqdm
+from lyricsgenius import Genius
 
-def process_file(filepath, report):
+# Инициализация Genius API
+GENIUS_ACCESS_TOKEN = "ВАШ_ТОКЕН_ЗДЕСЬ"  # Замените на ваш токен
+genius = Genius(GENIUS_ACCESS_TOKEN, skip_non_songs=True, excluded_terms=["(Remix)", "(Live)"])
+
+def clean_filename(filename):
+    """
+    Очищает имя файла от лишних символов и расширения.
+    """
+    name = os.path.splitext(filename)[0]
+    name = re.sub(r'\s*.*?', '', name)  # удаление текста в скобках
+    name = re.sub(r'[_\-]+', ' ', name)     # замена подчеркиваний и дефисов на пробелы
+    return name.strip()
+
+def normalize_audio(filepath):
+    """
+    Нормализует громкость аудиофайла с помощью ffmpeg.
+    """
+    temp_output = filepath + ".normalized.mp3"
+    command = [
+        "ffmpeg", "-i", filepath,
+        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+        "-y", temp_output
+    ]
+    subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.replace(temp_output, filepath)
+
+def fetch_lyrics(title, artist):
+    """
+    Получает текст песни с Genius.
+    """
     try:
-        # Очистка имени файла
-        filename = os.path.basename(filepath)
-        cleaned_name = clean_filename(filename)
-        if cleaned_name != filename:
-            os.rename(filepath, os.path.join(os.path.dirname(filepath), cleaned_name))
-            filepath = os.path.join(os.path.dirname(filepath), cleaned_name)
-
-        # Извлекаем исполнителя и название
-        artist, title = extract_artist_title(cleaned_name)
-
-        # Загружаем MP3
-        audio = MP3(filepath, ID3=ID3)
-        if audio.tags is None:
-            audio.add_tags()
-
-        # Нормализация звука (псевдо, замени при необходимости)
-        normalize_audio(filepath)
-        report['normalized'] += 1
-
-        # Обложка
-        cover_added = fetch_cover_image(audio, artist, title)
-        if cover_added:
-            report['covers'] += 1
-
-        # Текст песни
-        lyrics_added = fetch_lyrics(audio, artist, title)
-        if lyrics_added:
-            report['lyrics'] += 1
-
-        # Обновляем и сохраняем теги
-        updated = update_tags_and_save(audio, filepath, artist, title)
-        if updated:
-            report['tags'] += 1
-
-        report['processed'] += 1
-
+        song = genius.search_song(title, artist)
+        if song:
+            return song.lyrics
     except Exception as e:
-        report['errors'] += 1
-        report['error_files'].append((filepath, str(e)))
+        print(f"Ошибка при получении текста песни: {e}")
+    return None
 
+def fetch_cover_image(title, artist, save_path):
+    """
+    Загружает обложку песни с Genius.
+    """
+    try:
+        song = genius.search_song(title, artist)
+        if song and song.song_art_image_url:
+            response = requests.get(song.song_art_image_url)
+            if response.status_code == 200:
+                with open(save_path, 'wb') as f:
+                    f.write(response.content)
+                return save_path
+    except Exception as e:
+        print(f"Ошибка при получении обложки: {e}")
+    return None
 
-def main():
-    folder_input = input("Введите номер или имя папки (например: CD62): ").strip()
-    music_dir = os.path.join("/sdcard/Music", folder_input)
+def update_tags(filepath, title, artist, album=None, year=None, lyrics=None, cover_path=None):
+    """
+    Обновляет ID3-теги MP3-файла.
+    """
+    try:
+        audio = ID3(filepath)
+    except ID3NoHeaderError:
+        audio = ID3()
 
-    if not os.path.isdir(music_dir):
-        print(f"❌ Папка не найдена: {music_dir}")
-        sys.exit(1)
-
-    mp3_files = sorted(glob(os.path.join(music_dir, '*.mp3')))
-    report = {
-        'processed': 0,
-        'normalized': 0,
-        'tags': 0,
-        'covers': 0,
-        'lyrics': 0,
-        'errors': 0,
-        'error_files': []
-    }
-
-    print(f"🔍 Обработка треков в папке: {music_dir}")
-    for filepath in tqdm(mp3_files, desc="Обработка треков"):
-        process_file(filepath, report)
-
-    print("\n=== Отчёт ===")
-    print(f"✔ Обработано треков: {report['processed']}")
-    print(f"🎧 Нормализовано: {report['normalized']}")
-    print(f"🏷️ Обновлено тегов: {report['tags']}")
-    print(f"🖼️ Добавлено обложек: {report['covers']}")
-    print(f"📝 Добавлено текстов песен: {report['lyrics']}")
-    print(f"⚠ Проблемных файлов: {report['errors']}")
-    if report['errors']:
-        for f, err in report['error_files']:
-            print(f" - {os.path.basename(f)}: {err}")
-
-if __name__ == "__main__":
-    main()
+    audio["TIT2"] = TIT2(encoding=3, text=title)
+    audio["TPE1"] = TPE1(encoding=3, text=artist)
+    if album:
+        audio["TALB"] = TALB(encoding=3, text=album)
+    if year:
+        audio["TDRC"] = TDRC(encoding=3, text=str(year))
+    if lyrics:
+        audio["USLT"] = USLT(encoding=3, desc="Lyrics", text=lyrics)
+    if cover_path and os.path.isfile(cover_path):
+        with open(cover_path, 'rb') as img:
+            audio["APIC"] = APIC(
+                encoding=3,
+                mime='image/jpeg',
+                type=3,
+                desc='Cover',
+                data=img.read()
+            )
+    audio.save(filepath)
